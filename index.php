@@ -34,7 +34,7 @@ class Api {
       $current = file_get_contents(__FILE__);
       $latest = file_get_contents($this->update_url);
       if ($current != $latest) {
-        //file_put_contents(__FILE__, $latest);
+        file_put_contents(__FILE__, $latest);
       }
     }
     touch($lastCheck);
