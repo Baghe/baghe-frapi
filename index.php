@@ -1,24 +1,53 @@
 <?php
 
 class Api {
+  private $version = "1.4.0";
   private $debug = false;
+  private $debug_log = array();
   private $timestart;
   private $databases = array();
   private $log_path;
   private $update_url = "https://raw.githubusercontent.com/Baghe/baghe-frapi/refs/heads/main/index.php";
 
   public function __construct($params) {
-    $this->timestart = microtime(true);
-    $this->check_updates();
+    // Set debug mode
     if (!empty($params["env"]) && $params["env"] == "test") {
       $this->debug = true;
     }
+
+    // Initialize
+    self::debug_log("--------------------------------- START ---------------------------------");
+    self::debug_log("API version: " . $this->version);
+    $this->timestart = microtime(true);
+
+    // Check for .api folder
+    if (!file_exists(dirname(__FILE__) . "/.api")) {
+      self::debug_log("Creating .api folder");
+      mkdir(dirname(__FILE__) . "/.api", 0777, true);
+    }
+
+    // Check for updates
+    if (empty($params["skip-update"])) {
+      $this->check_updates();
+    } else {
+      self::debug_log("Update check skipped");
+    }
+
+    // Define databases
     if (!empty($params["databases"])) {
       foreach ($params["databases"] as $key => $value) {
-        $this->databases[$key] = new Database($value);
+        self::debug_log("Defining database: {$key}");
+        $debug_log = function ($string) {
+          self::debug_log("[DB] {$string}", "");
+        };
+        $this->databases[$key] = new Database($value, $debug_log);
       }
     }
+
+    // Set log path
     if (!empty($params["log_path"])) {
+      $params["log_path"] = str_replace("\\", "/", realpath($params["log_path"]));
+      self::debug_log("Log path: {$params["log_path"]}");
       $this->log_path = $params["log_path"];
       $this->log_init();
     }
@@ -26,16 +55,23 @@ class Api {
 
   private function check_updates() {
     $lastCheck = dirname(__FILE__) . "/.api/lastcheck";
-    if (!file_exists(dirname(__FILE__) . "/.api")) {
-      mkdir(dirname(__FILE__) . "/.api", 0777, true);
-    }
-
     if (!file_exists($lastCheck) || (time() - filemtime($lastCheck)) > 3600) {
+      self::debug_log("Checking for updates");
+      self::debug_log("Last check: " . (file_exists($lastCheck) ? date("Y-m-d H:i:s", filemtime($lastCheck)) : "Never"));
+
       $current = file_get_contents(__FILE__);
       $latest = file_get_contents($this->update_url);
       if ($current != $latest) {
+        self::debug_log("Update found");
+        self::debug_log("Current: " . md5($current));
+        self::debug_log("Latest: " . md5($latest));
         file_put_contents(__FILE__, $latest);
+        self::debug_log("Updated");
+      } else {
+        self::debug_log("No updates found");
       }
+    } else {
+      self::debug_log("Update check skipped");
     }
     touch($lastCheck);
   }
@@ -56,14 +92,21 @@ class Api {
   }
 
   public function output($result, $data, $error = null) {
+    self::debug_log("--------------------------------- END ---------------------------------");
     $output = array(
       "Result" => $result,
       "Data" => $data,
       "Error" => $error,
       "Datetime" => date("Y-m-d H:i:s"),
+      "Version" => $this->version
     );
     if ($this->debug) {
-      $output["Elapsed"] = round(microtime(true) - $this->timestart, 4);
+      $output["Debug"] = array(
+        "Elapsed" => round(microtime(true) - $this->timestart, 4),
+        "Memory" => memory_get_usage(true),
+        "Peak" => memory_get_peak_usage(true),
+        "Log" => $this->debug_log
+      );
     }
     ob_clean();
     if (!empty($_SERVER["HTTP_ORIGIN"])) {
@@ -91,10 +134,17 @@ class Api {
   }
 
   /* LOGGING */
+  protected function debug_log($string, $space = " ") {
+    if ($this->debug) {
+      $this->debug_log[] = "[" . date("H:i:s") . "]{$space}{$string}";
+    }
+  }
+
   public function log($data, $exit = false) {
     if (empty($this->log_path)) {
       return;
     }
+    self::debug_log("[LOG][USER] {$data}", "");
     return self::log_append("USER", null, null, $data, $exit);
   }
 
@@ -119,15 +169,18 @@ class Api {
   private function log_override_fatal() {
     $error = error_get_last();
     if (isset($error["type"]) && $error["type"] == E_ERROR) {
+      self::debug_log("[ERROR] {$error["message"]} in {$error["file"]} on line {$error["line"]}");
       $this->log_append("ERROR", $error["file"], $error["line"], $error["message"], true);
     }
   }
 
   private function log_override_error($num, $message, $file, $line, $context = null) {
+    self::debug_log("[ERROR] {$message} in {$file} on line {$line}");
     $this->log_append("ERROR", $file, $line, $message);
   }
 
   private function log_override_exception($e) {
+    self::debug_log("[ERROR] {$e->getMessage()} in {$e->getFile()} on line {$e->getLine()}");
     $this->log_append("ERROR", $e->getFile(), $e->getLine(), $e->getMessage(), true);
   }
 
@@ -144,17 +197,23 @@ class Api {
 class Database {
   private $connection;
   private $database;
+  private $debug_log;
 
-  public function __construct($database, $params = array()) {
-    if (!empty($params) && empty($database["params"])) {
-      $database["params"] = $params;
-    }
+  public function __construct($database, $debug_log = null) {
+    $this->debug_log = $debug_log;
     $this->database = $database;
+  }
+
+  private function log($string) {
+    if (is_callable($this->debug_log)) {
+      call_user_func($this->debug_log, $string);
+    }
   }
 
   public function connect() {
     try {
       if (!isset($this->connection)) {
+        self::log("Connecting to {$this->database["hostname"]}");
         $port = 3306;
         if (!empty($this->database["port"])) {
           $port = $this->database["port"];
@@ -165,14 +224,17 @@ class Database {
         if ($this->connection) {
           if (isset($this->database["params"])) {
             if (isset($this->database["params"]["charset"]) && $this->database["params"]["charset"]) {
+              self::log("Setting custom charset: {$this->database["params"]["charset"]}");
               $this->connection->set_charset($this->database["params"]["charset"]);
             } else {
               $this->connection->set_charset("utf8");
             }
             if (isset($this->database["params"]["sql_mode"])) {
+              self::log("Setting custom sql_mode: {$this->database["params"]["sql_mode"]}");
               $this->connection->query("SET sql_mode = '{$this->database["params"]["sql_mode"]}';");
             }
             if (isset($this->database["params"]["time_zone"])) {
+              self::log("Setting custom time_zone: {$this->database["params"]["time_zone"]}");
               $this->connection->query("SET time_zone = '{$this->database["params"]["time_zone"]}';");
             }
           } else {
@@ -183,6 +245,7 @@ class Database {
       }
     } catch (Exception $ex) {
       self::serverDown($ex->getMessage());
+      self::log("Connection error: {$ex->getMessage()}");
       trigger_error("[DATABASE] connect: " . $ex->getMessage(), E_USER_WARNING);
     }
     return $this->connection;
@@ -192,6 +255,7 @@ class Database {
     try {
       $conn = $this->connect();
       if ($conn) {
+        self::log("Query: {$query}");
         $result = $conn->query($query);
         if ($result) {
           if ($return_id) {
@@ -199,12 +263,14 @@ class Database {
           }
           return $result;
         } else {
+          self::log("Query error: {$conn->error}");
           self::serverDown($conn->error);
           trigger_error("[DATABASE] query: " . $conn->error, E_USER_WARNING);
           trigger_error("[{$query}]", E_USER_WARNING);
         }
       }
     } catch (Exception $ex) {
+      self::log("Query exception: {$ex->getMessage()}");
       self::serverDown($ex->getMessage());
       trigger_error("[DATABASE] query: " . $ex->getMessage(), E_USER_WARNING);
       trigger_error("[{$query}]", E_USER_WARNING);
@@ -217,18 +283,21 @@ class Database {
     try {
       $conn = $this->connect();
       if ($conn) {
+        self::log("Select: {$query}");
         $result = $conn->query($query);
         if ($result) {
           while ($row = $result->fetch_assoc()) {
             $rows[] = $row;
           }
         } else {
+          self::log("Query error: {$conn->error}");
           self::serverDown($conn->error);
           trigger_error("[DATABASE] select: " . $conn->error, E_USER_WARNING);
           trigger_error("[{$query}]", E_USER_WARNING);
         }
       }
     } catch (Exception $ex) {
+      self::log("Query exception: {$ex->getMessage()}");
       self::serverDown($ex->getMessage());
       trigger_error("[DATABASE] select: " . $ex->getMessage(), E_USER_WARNING);
       trigger_error("[{$query}]", E_USER_WARNING);
@@ -260,6 +329,7 @@ class Database {
 
         $conn = $this->connect();
         if ($conn) {
+          self::log("Insert: {$query}");
           $result = $conn->query($query);
           if ($result) {
             if ($returnId) {
@@ -267,6 +337,7 @@ class Database {
             }
             return true;
           } else {
+            self::log("Insert error: {$conn->error}");
             self::serverDown($conn->error);
             trigger_error("[DATABASE] Insert: " . $conn->error, E_USER_WARNING);
             trigger_error("[DATABASE] Query:  |{$query}|", E_USER_WARNING);
@@ -275,6 +346,7 @@ class Database {
         }
       }
     } catch (Exception $ex) {
+      self::log("Insert exception: {$ex->getMessage()}");
       self::serverDown($ex->getMessage());
       trigger_error("[DATABASE] insert: " . $ex->getMessage(), E_USER_WARNING);
       if ($query) {
@@ -302,10 +374,12 @@ class Database {
 
         $conn = $this->connect();
         if ($conn) {
+          self::log("InsertMultiple: {$query}");
           $result = $conn->query($query);
           if ($result) {
             return true;
           } else {
+            self::log("InsertMultiple error: {$conn->error}");
             self::serverDown($conn->error);
             trigger_error("[DATABASE] insertMultiple: " . $conn->error, E_USER_WARNING);
             trigger_error("[{$query}]", E_USER_WARNING);
@@ -313,6 +387,7 @@ class Database {
         }
       }
     } catch (Exception $ex) {
+      self::log("InsertMultiple exception: {$ex->getMessage()}");
       self::serverDown($ex->getMessage());
       trigger_error("[DATABASE] insertMultiple: " . $ex->getMessage(), E_USER_WARNING);
       if ($query) {
@@ -329,10 +404,12 @@ class Database {
         $query = "UPDATE {$table} SET " . self::updateValues($values) . ($where ? " WHERE {$where}" : "") . ";";
         $conn = $this->connect();
         if ($conn) {
+          self::log("Update: {$query}");
           $result = $conn->query($query);
           if ($result) {
             return true;
           } else {
+            self::log("Update error: {$conn->error}");
             self::serverDown($conn->error);
             trigger_error("[DATABASE] Update: " . $conn->error, E_USER_WARNING);
             trigger_error("[DATABASE] Query:  |{$query}|", E_USER_WARNING);
@@ -341,6 +418,7 @@ class Database {
         }
       }
     } catch (Exception $ex) {
+      self::log("Update exception: {$ex->getMessage()}");
       self::serverDown($ex->getMessage());
       trigger_error("[DATABASE] update: " . $ex->getMessage(), E_USER_WARNING);
       if ($query) {
@@ -366,16 +444,19 @@ class Database {
       $query = "DELETE FROM {$table}" . ($where ? " WHERE {$where}" : "") . ";";
       $conn = $this->connect();
       if ($conn) {
+        self::log("Delete: {$query}");
         $result = $conn->query($query);
         if ($result) {
           return true;
         } else {
+          self::log("Delete error: {$conn->error}");
           self::serverDown($conn->error);
           trigger_error("[DATABASE] Delete: " . $conn->error, E_USER_WARNING);
           trigger_error("[DATABASE] Query:  |{$query}|", E_USER_WARNING);
         }
       }
     } catch (Exception $ex) {
+      self::log("Delete exception: {$ex->getMessage()}");
       self::serverDown($ex->getMessage());
       trigger_error("[DATABASE] delete: " . $ex->getMessage(), E_USER_WARNING);
       if ($query) {
@@ -408,6 +489,8 @@ class Database {
   public function startTransaction() {
     $conn = $this->connect();
     if ($conn) {
+      self::log("Starting transaction");
+      $conn->autocommit(false);
       $conn->begin_transaction();
     }
     return null;
@@ -416,6 +499,7 @@ class Database {
   public function commitTransaction() {
     $conn = $this->connect();
     if ($conn) {
+      self::log("Committing transaction");
       $conn->commit();
     }
     return null;
@@ -424,6 +508,7 @@ class Database {
   public function rollbackTransaction() {
     $conn = $this->connect();
     if ($conn) {
+      self::log("Rolling back transaction");
       $conn->rollback();
     }
     return null;
