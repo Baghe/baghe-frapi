@@ -23,7 +23,7 @@ class Api {
   private $timestart;
   private $databases = array();
   private $log_path;
-  private $update_url = "https://api.github.com/repos/andrea-rossetti/grt/commits/master";
+  private $update_url = "https://raw.githubusercontent.com/Baghe/baghe-frapi/refs/heads/main/index.php?token=GHSAT0AAAAAAC5PGFO7473W6KT3TBYFKVUUZ6K2CFQ";
 
   public function __construct($params) {
     $this->timestart = microtime(true);
@@ -354,6 +354,16 @@ class Database {
     return false;
   }
 
+  private function updateValues($fields, $exclude = array()) {
+    $values = array();
+    foreach ($fields as $field => $value) {
+      if (!in_array($field, $exclude)) {
+        $values[] = "{$field} = {$value}";
+      }
+    }
+    return implode(", ", $values);
+  }
+
   public function delete($table, $where = null) {
     $query = null;
     try {
@@ -385,7 +395,7 @@ class Database {
   }
 
   public function now($format = "Y-m-d H:i:s") {
-    return self::quote(date($format));
+    return self::q(date($format));
   }
 
   public function q($value, $nullvalue = null) {
