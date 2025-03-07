@@ -144,7 +144,7 @@ class Api {
     if (empty($this->log_path)) {
       return;
     }
-    self::debug_log("[LOG][USER] {$data}", "");
+    self::debug_log("[USER] {$data}", "");
     return self::log_append("USER", null, null, $data, $exit);
   }
 
