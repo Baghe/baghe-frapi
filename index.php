@@ -1,23 +1,5 @@
 <?php
 
-$Api = new Api(array(
-  "env" => "test",
-  "databases" => array(
-    "main" => array(
-      "hostname" => "127.0.0.1",
-      "database" => "Portale",
-      "username" => "Portale",
-      "password" => "X_NEb2L1sC]SbKRd",
-      "port" => 3307
-    )
-  ),
-  "log_path" => __DIR__ . "/log"
-));
-$Test = $Api->input("test", "Default");
-$Results = $Api->db()->select("SELECT * FROM ModuliTipi");
-$Api->output(true, $Results, $Test);
-
-
 class Api {
   private $debug = false;
   private $timestart;
@@ -27,6 +9,7 @@ class Api {
 
   public function __construct($params) {
     $this->timestart = microtime(true);
+    $this->check_updates();
     if (!empty($params["env"]) && $params["env"] == "test") {
       $this->debug = true;
     }
@@ -42,6 +25,19 @@ class Api {
   }
 
   private function check_updates() {
+    $lastCheck = dirname(__FILE__) . "/.api/lastcheck";
+    if (!file_exists(dirname(__FILE__) . "/.api")) {
+      mkdir(dirname(__FILE__) . "/.api", 0777, true);
+    }
+
+    if (!file_exists($lastCheck) || (time() - filemtime($lastCheck)) > 3600) {
+      $current = file_get_contents(__FILE__);
+      $latest = file_get_contents($this->update_url);
+      if ($current != $latest) {
+        //file_put_contents(__FILE__, $latest);
+      }
+    }
+    touch($lastCheck);
   }
 
   /* INPUT/OUTPUT */
