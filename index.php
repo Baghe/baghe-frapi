@@ -5,7 +5,7 @@ class Api {
   private $timestart;
   private $databases = array();
   private $log_path;
-  private $update_url = "https://raw.githubusercontent.com/Baghe/baghe-frapi/refs/heads/main/index.php?token=GHSAT0AAAAAAC5PGFO7473W6KT3TBYFKVUUZ6K2CFQ";
+  private $update_url = "https://raw.githubusercontent.com/Baghe/baghe-frapi/refs/heads/main/index.php";
 
   public function __construct($params) {
     $this->timestart = microtime(true);
